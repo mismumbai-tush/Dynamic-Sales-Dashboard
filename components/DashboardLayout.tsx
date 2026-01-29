@@ -1,0 +1,243 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import Sidebar from './Sidebar';
+import DashboardPage from './DashboardPage';
+import UploadModal from './UploadModal';
+import DeleteDataModal from './DeleteDataModal';
+import PPTGeneratorPage from './PPTGeneratorPage';
+import { AllData, DomainData, OrderData, ColumnMapping } from '../types';
+
+interface DashboardLayoutProps {
+  onLogout: () => void;
+}
+
+type View = 'Dashboard' | 'PPT';
+
+const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
+  const UPLOAD_DOMAINS = ["Myntra", "Amazon", "Flipkart", "AJIO", "Shopify"];
+  const SIDEBAR_DOMAINS = ["All Domains", ...UPLOAD_DOMAINS];
+
+  const [activeDomain, setActiveDomain] = useState(SIDEBAR_DOMAINS[0]);
+  const [allData, setAllData] = useState<AllData>(() => {
+    try {
+        const savedData = localStorage.getItem('salesDashboardData');
+        return savedData ? JSON.parse(savedData) : {};
+    } catch (error) {
+        console.error("Could not parse saved data from localStorage", error);
+        return {};
+    }
+  });
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [currentView, setCurrentView] = useState<View>('Dashboard');
+  const [uploadSummary, setUploadSummary] = useState<{ domain: string; added: number; duplicates: number } | null>(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('salesDashboardData', JSON.stringify(allData));
+    } catch (error) {
+      console.error("Could not save data to localStorage", error);
+    }
+  }, [allData]);
+
+  const handleFileUpload = (domain: string, newData: OrderData[], newMapping: ColumnMapping) => {
+    setAllData(prev => {
+      const existingDomainData = prev[domain];
+      const existingData = existingDomainData?.data || [];
+
+      const rowToString = (row: OrderData): string => {
+        return JSON.stringify(Object.entries(row).sort((a, b) => a[0].localeCompare(b[0])));
+      };
+
+      const allKnownRows = new Set(existingData.map(rowToString));
+      let duplicateCount = 0;
+
+      const uniqueNewData = newData.filter(row => {
+        const rowString = rowToString(row);
+        if (allKnownRows.has(rowString)) {
+          duplicateCount++;
+          return false; 
+        }
+        allKnownRows.add(rowString); 
+        return true;
+      });
+
+      setUploadSummary({ domain, added: uniqueNewData.length, duplicates: duplicateCount });
+      setTimeout(() => setUploadSummary(null), 8000); // Clear summary after 8 seconds
+
+      const consolidatedData = [...existingData, ...uniqueNewData];
+      return { ...prev, [domain]: { data: consolidatedData, mapping: newMapping } };
+    });
+    setActiveDomain(domain);
+    setCurrentView('Dashboard');
+  };
+
+  const handleDataDelete = (domain: string, year: number, month: number) => {
+    if (domain === 'All Domains' && month === -1 && year) {
+        setAllData(prev => {
+            const nextState = { ...prev };
+            for(const dom in nextState) {
+                const domainState = nextState[dom];
+                 if (!domainState) continue;
+                 const { data, mapping } = domainState;
+                 if (!mapping.date) continue;
+
+                 const newData = data.filter(row => {
+                     const date = new Date(row[mapping.date!] as string);
+                     if (isNaN(date.getTime())) return true;
+                     return date.getFullYear() !== year;
+                 });
+                 nextState[dom] = { ...domainState, data: newData };
+            }
+            return nextState;
+        });
+        return;
+    }
+
+    if (domain === 'All Domains') {
+      setAllData({});
+      return;
+    }
+
+    setAllData(prev => {
+      const domainState = prev[domain];
+      if (!domainState) return prev;
+      
+      const { data, mapping } = domainState;
+      if (!mapping.date) return prev;
+
+      const newData = data.filter(row => {
+        const date = new Date(row[mapping.date!] as string);
+        if (isNaN(date.getTime())) return true;
+        
+        const matchesYear = date.getFullYear() === year;
+        const matchesMonth = month === -1 ? true : date.getMonth() === month;
+
+        return !(matchesYear && matchesMonth);
+      });
+      
+      return { ...prev, [domain]: { ...domainState, data: newData } };
+    });
+  };
+
+  const currentDomainData = useMemo<DomainData | null>((() => {
+    if (activeDomain === 'All Domains') {
+      const allDomainValues = Object.values(allData).filter((d: any): d is DomainData => !!d?.data?.length);
+      if (allDomainValues.length === 0) return null;
+
+      const standardKeys: (keyof ColumnMapping)[] = [
+        'date', 'customer', 'item', 'quantity', 'price', 'city', 'state', 
+        'zipcode', 'revenue', 'brand', 'orderStatus', 'cancellationReason', 
+        'courier', 'sku', 'articleType', 'discount', 'deliveredDate', 'cancelledDate', 'returnDate', 'orderId'
+      ];
+      
+      const consolidatedData: OrderData[] = allDomainValues.flatMap(domainState => {
+        const { data, mapping } = domainState;
+        return data.map(row => {
+          const normalizedRow: OrderData = {};
+          for (const key of standardKeys) {
+            const mappedKey = mapping[key];
+            if (mappedKey && row[mappedKey] !== undefined && row[mappedKey] !== null) {
+              normalizedRow[key] = row[mappedKey];
+            } else {
+              normalizedRow[key] = null;
+            }
+          }
+          if (normalizedRow['revenue'] === null && normalizedRow['price'] !== null && normalizedRow['quantity'] !== null) {
+              const price = Number(normalizedRow['price']);
+              const quantity = Number(normalizedRow['quantity']);
+              if (!isNaN(price) && !isNaN(quantity)) {
+                  normalizedRow['revenue'] = price * quantity;
+              }
+          }
+          return normalizedRow;
+        });
+      });
+      
+      const consolidatedMapping: ColumnMapping = {
+        date: 'date', customer: 'customer', item: 'item', quantity: 'quantity', 
+        price: 'price', city: 'city', state: 'state', zipcode: 'zipcode', 
+        revenue: 'revenue', brand: 'brand', orderStatus: 'orderStatus', 
+        cancellationReason: 'cancellationReason', courier: 'courier', sku: 'sku', 
+        articleType: 'articleType', discount: 'discount',
+        deliveredDate: 'deliveredDate', cancelledDate: 'cancelledDate', returnDate: 'returnDate', orderId: 'orderId'
+      };
+
+      return { data: consolidatedData, mapping: consolidatedMapping };
+    }
+    return allData[activeDomain] || null;
+  }), [activeDomain, allData]);
+
+  const onSetActiveDomain = (domain: string) => {
+    setActiveDomain(domain);
+    setCurrentView('Dashboard');
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-900">
+      <Sidebar 
+        domains={SIDEBAR_DOMAINS} 
+        activeDomain={activeDomain} 
+        setActiveDomain={onSetActiveDomain} 
+        onLogout={onLogout}
+        setCurrentView={setCurrentView}
+        activeView={currentView}
+        openDeleteModal={() => setIsDeleteModalOpen(true)}
+      />
+      <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto flex flex-col relative">
+        {uploadSummary && (
+          <div className="fixed top-6 right-6 z-[60] animate-in slide-in-from-right fade-in duration-300">
+            <div className="bg-slate-900 border border-blue-500/30 rounded-2xl p-5 shadow-2xl backdrop-blur-xl flex items-start gap-4 max-w-sm">
+              <div className="bg-blue-500/20 p-2 rounded-lg">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-400 w-5 h-5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+              </div>
+              <div>
+                <h4 className="text-white font-bold text-sm">Upload Summary: {uploadSummary.domain}</h4>
+                <p className="text-slate-400 text-xs mt-1">Successfully added <span className="text-blue-400 font-bold">{uploadSummary.added}</span> unique records.</p>
+                {uploadSummary.duplicates > 0 && (
+                  <p className="text-amber-400 text-xs mt-1 font-medium">Purged <span className="font-bold">{uploadSummary.duplicates}</span> duplicate rows.</p>
+                )}
+              </div>
+              <button onClick={() => setUploadSummary(null)} className="text-slate-500 hover:text-white transition-colors">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+              </button>
+            </div>
+          </div>
+        )}
+
+        <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-6">
+          <h1 className="text-3xl font-bold text-white">
+            {currentView === 'Dashboard' ? `${activeDomain} Dashboard` : 'PPT Generator'}
+          </h1>
+          <button
+            onClick={() => setIsUploadModalOpen(true)}
+            className="px-5 py-2.5 font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-blue-500 transition-colors duration-300"
+          >
+            Upload New Data
+          </button>
+        </header>
+        <div className="flex-1">
+          {currentView === 'Dashboard' ? (
+            <DashboardPage key={activeDomain} domain={activeDomain} domainData={currentDomainData} />
+          ) : (
+            <PPTGeneratorPage allData={allData} domains={SIDEBAR_DOMAINS} />
+          )}
+        </div>
+      </main>
+      <UploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
+        onUploadComplete={handleFileUpload}
+        domains={UPLOAD_DOMAINS}
+      />
+      <DeleteDataModal
+        isOpen={isDeleteModalOpen}
+        onClose={() => setIsDeleteModalOpen(false)}
+        onDelete={handleDataDelete}
+        allData={allData}
+        domains={UPLOAD_DOMAINS}
+      />
+    </div>
+  );
+};
+
+export default DashboardLayout;

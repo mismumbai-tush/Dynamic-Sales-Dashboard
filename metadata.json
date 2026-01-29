@@ -1,0 +1,5 @@
+{
+  "name": "Dynamic Sales Dashboard",
+  "description": "An interactive dashboard that visualizes sales data from an uploaded CSV file. Features include KPIs, data tables, and charts for top items, customers, and cities. Includes a simulated login page and a multi-domain sidebar.",
+  "requestFramePermissions": []
+}
