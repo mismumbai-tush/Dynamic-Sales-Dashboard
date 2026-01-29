@@ -4,21 +4,19 @@ import { AllData } from '../types';
 interface DeleteDataModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onDelete: (domain: string, year: number, month: number) => void;
+  onDelete: (domain: string, year: number, month: number) => Promise<void>;
   allData: AllData;
   domains: string[];
 }
 
 const monthAbbreviations = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-// Utility for robust date parsing to find available years/months
 function robustParseDate(dateValue: any): Date | null {
     if (!dateValue) return null;
     if (dateValue instanceof Date && !isNaN(dateValue.getTime())) return dateValue;
     let date = new Date(dateValue);
     if (!isNaN(date.getTime())) return date;
     const s = String(dateValue);
-    // Handle DD-MM-YYYY or DD/MM/YYYY
     const parts = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
     if (parts) {
         const day = parseInt(parts[1], 10);
@@ -36,8 +34,8 @@ const DeleteDataModal: React.FC<DeleteDataModalProps> = ({ isOpen, onClose, onDe
   const [selectedDomain, setSelectedDomain] = useState(domainOptions[0]);
   const [selectedYear, setSelectedYear] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  // Re-scan when domain changes
   const availableYears = useMemo(() => {
     const yearSet = new Set<number>();
     const domainsToScan = selectedDomain === 'All Domains' 
@@ -46,13 +44,9 @@ const DeleteDataModal: React.FC<DeleteDataModalProps> = ({ isOpen, onClose, onDe
 
     domainsToScan.forEach(domainState => {
       if (!domainState?.data || !domainState.data.length) return;
-      
       const { data, mapping } = domainState;
-      // Use mapped date or find one manually
       const dateKey = mapping.date || Object.keys(data[0]).find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('on'));
-      
       if (!dateKey) return;
-
       data.forEach(item => {
         const date = robustParseDate(item[dateKey]);
         if (date) yearSet.add(date.getFullYear());
@@ -62,17 +56,21 @@ const DeleteDataModal: React.FC<DeleteDataModalProps> = ({ isOpen, onClose, onDe
     return Array.from(yearSet).sort((a, b) => b - a);
   }, [allData, selectedDomain]);
 
-  const handleDelete = () => {
-    if (!selectedDomain || !selectedYear || !selectedMonth) {
-      alert("Please select a domain, year, and month to delete.");
-      return;
-    }
+  const handleDelete = async () => {
+    if (!selectedDomain || !selectedYear || !selectedMonth) return;
     const monthName = selectedMonth === '-1' ? `the entire year of` : monthAbbreviations[parseInt(selectedMonth)];
-    const confirmationText = `Are you sure you want to delete all data for ${selectedDomain} in ${monthName} ${selectedYear}? This action cannot be undone.`;
+    const confirmMsg = `Permanently delete ${selectedDomain} data for ${monthName} ${selectedYear}? This syncs to Supabase.`;
     
-    if (window.confirm(confirmationText)) {
-        onDelete(selectedDomain, parseInt(selectedYear), parseInt(selectedMonth));
-        onClose();
+    if (window.confirm(confirmMsg)) {
+        setIsDeleting(true);
+        try {
+          await onDelete(selectedDomain, parseInt(selectedYear), parseInt(selectedMonth));
+          onClose();
+        } catch (err) {
+          alert("Purge failed. Check connection.");
+        } finally {
+          setIsDeleting(false);
+        }
     }
   };
 
@@ -80,58 +78,51 @@ const DeleteDataModal: React.FC<DeleteDataModalProps> = ({ isOpen, onClose, onDe
     if (!isOpen) {
       setSelectedYear('');
       setSelectedMonth('');
+      setIsDeleting(false);
     }
   }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const commonInputStyles = "w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-200 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50";
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
       <div className="relative w-full max-w-lg p-6 bg-gray-800 border border-gray-700 rounded-lg shadow-xl animate-in zoom-in duration-200">
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white">
+        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-white" disabled={isDeleting}>
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
         </button>
-        <h2 className="text-2xl font-bold text-white mb-4">Purge Sales Data</h2>
-        <p className="text-sm text-gray-400 mb-6 leading-relaxed">Select the specific period and domain for which you want to delete data. This action is irreversible and persists across sessions.</p>
-        
+        <h2 className="text-2xl font-bold text-white mb-4">Purge Sales Records</h2>
         <div className="space-y-5">
             <div>
-              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Target Domain</label>
-              <select value={selectedDomain} onChange={e => { setSelectedDomain(e.target.value); setSelectedYear(''); setSelectedMonth(''); }} className={commonInputStyles}>
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Platform</label>
+              <select value={selectedDomain} onChange={e => { setSelectedDomain(e.target.value); setSelectedYear(''); }} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-200" disabled={isDeleting}>
                 {domainOptions.map(d => <option key={d} value={d}>{d}</option>)}
               </select>
             </div>
-            
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Available Year</label>
-                <select value={selectedYear} onChange={e => { setSelectedYear(e.target.value); setSelectedMonth(''); }} className={commonInputStyles} disabled={availableYears.length === 0}>
-                  <option value="">{availableYears.length === 0 ? 'No Data Found' : '-- Select --'}</option>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Year</label>
+                <select value={selectedYear} onChange={e => setSelectedYear(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-200" disabled={availableYears.length === 0 || isDeleting}>
+                  <option value="">-- Year --</option>
                   {availableYears.map(year => <option key={year} value={year}>{year}</option>)}
                 </select>
               </div>
-
               <div>
-                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Target Month</label>
-                <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} className={commonInputStyles} disabled={!selectedYear}>
-                  <option value="">-- Select --</option>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Month</label>
+                <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} className="w-full bg-gray-700 border border-gray-600 rounded-md px-3 py-2 text-sm text-gray-200" disabled={!selectedYear || isDeleting}>
+                  <option value="">-- Month --</option>
                   {monthAbbreviations.map((month, index) => <option key={month} value={index}>{month}</option>)}
-                  <option value="-1">All Months (Entire Year)</option>
+                  <option value="-1">All Months</option>
                 </select>
               </div>
             </div>
         </div>
-
         <div className="mt-8">
           <button
-            type="button"
             onClick={handleDelete}
-            disabled={!selectedDomain || !selectedYear || !selectedMonth}
-            className="w-full px-4 py-4 font-bold text-white bg-red-600 rounded-xl hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-red-500 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed shadow-lg shadow-red-900/20 active:scale-[0.98]"
+            disabled={!selectedDomain || !selectedYear || !selectedMonth || isDeleting}
+            className="w-full px-4 py-4 font-bold text-white bg-red-600 rounded-xl hover:bg-red-700 disabled:bg-gray-600 shadow-lg"
           >
-            Permanently Purge Records
+            {isDeleting ? 'Deleting from Cloud...' : 'Confirm Purge'}
           </button>
         </div>
       </div>

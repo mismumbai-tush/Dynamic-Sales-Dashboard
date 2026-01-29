@@ -2,9 +2,8 @@ import React, { useState } from 'react';
 import { analyzeCsvData } from '../utils/gemini';
 import { OrderData, ColumnMapping } from '../types';
 
-const UploadIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-8 h-8 text-gray-500"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" x2="12" y1="3" y2="15" /></svg>;
-const LinkIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-gray-400"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"></path></svg>;
-
+const UploadIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-8 h-8 text-gray-500"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" x2="12" y1="3" y2="15" /></svg>;
+const LinkIcon = () => <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5 text-gray-400"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.72"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.72-1.72"></path></svg>;
 
 interface UploadModalProps {
   isOpen: boolean;
@@ -40,18 +39,16 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
   const processData = async (data: OrderData[], domain: string) => {
     try {
       if (!data || data.length === 0) {
-        throw new Error("The data source is empty or contains only headers. Please provide valid data.");
+        throw new Error("The data source is empty. Please provide valid data.");
       }
+      
       const headers = Object.keys(data[0]);
-      setStatusMessage("AI is analyzing your data structure...");
+      setIsLoading(true);
+      setStatusMessage("AI is analyzing data structure...");
+      
       const mapping = await analyzeCsvData(headers, data.slice(0, 5));
       
-      if (!mapping.revenue && (!mapping.price || !mapping.quantity)) {
-        throw new Error("AI could not identify a revenue/sales column, or price and quantity columns. Please check your data for clear headers like 'revenue', 'price', etc.");
-      }
-
-      setStatusMessage("Sanitizing data types...");
-      
+      setStatusMessage("Cleaning and formatting records...");
       const numericMappingKeys: (keyof ColumnMapping)[] = ['quantity', 'price', 'revenue', 'discount'];
       const columnsToSanitize = numericMappingKeys
         .map(key => mapping[key])
@@ -64,23 +61,21 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
           if (rawValue === null || rawValue === undefined || String(rawValue).trim() === '') {
             newRow[colName] = null;
           } else {
-            // Remove currency symbols, commas, and any non-numeric characters except for the decimal point and negative sign.
             const cleanedValue = String(rawValue).replace(/[^0-9.-]+/g, "");
             const numericValue = parseFloat(cleanedValue);
-            newRow[colName] = isNaN(numericValue) ? null : numericValue; // Store as number, or null if conversion fails
+            newRow[colName] = isNaN(numericValue) ? null : numericValue;
           }
         }
         return newRow;
       });
 
-
-      setStatusMessage("Analysis complete. Uploading data...");
-      onUploadComplete(domain, sanitizedData, mapping);
+      setStatusMessage("Finalizing upload...");
+      await onUploadComplete(domain, sanitizedData, mapping);
       handleClose();
 
     } catch (err: any) {
+      console.error("Processing Error:", err);
       setError(err.message || 'An unknown error occurred during analysis.');
-    } finally {
       setIsLoading(false);
       setStatusMessage(null);
     }
@@ -89,20 +84,20 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
   const handleFile = (selectedFile: File, domain: string) => {
     setIsLoading(true);
     setError(null);
-    setStatusMessage("Reading file...");
+    setStatusMessage("Reading file binary...");
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const fileData = e.target?.result;
-        if (!fileData) throw new Error("Could not read file.");
+        if (!fileData) throw new Error("Could not read file content.");
 
         let jsonData: OrderData[];
         const fileName = selectedFile.name.toLowerCase();
 
         if (fileName.endsWith('.csv')) {
           const results = window.Papa.parse(fileData as string, { header: true, skipEmptyLines: true });
-          if (results.errors.length) throw new Error(`CSV Parsing Error: ${results.errors[0].message}`);
+          if (results.errors.length) throw new Error(`CSV Error: ${results.errors[0].message}`);
           jsonData = results.data as OrderData[];
         } else if (fileName.endsWith('.xls') || fileName.endsWith('.xlsx')) {
           const workbook = window.XLSX.read(fileData, { type: 'binary' });
@@ -110,10 +105,9 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
           const worksheet = workbook.Sheets[sheetName];
           jsonData = window.XLSX.utils.sheet_to_json(worksheet, { cellDates: true }) as OrderData[];
         } else {
-          throw new Error("Unsupported file type. Please upload a CSV or Excel file (.xls, .xlsx).");
+          throw new Error("Unsupported format. Use CSV or Excel.");
         }
-        processData(jsonData, domain);
-
+        await processData(jsonData, domain);
       } catch (err: any) {
         setError(err.message);
         setIsLoading(false);
@@ -121,9 +115,8 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
       }
     };
     reader.onerror = () => {
-        setError("Failed to read the file.");
+        setError("Disk read error.");
         setIsLoading(false);
-        setStatusMessage(null);
     };
 
     if (selectedFile.name.toLowerCase().endsWith('.csv')) {
@@ -136,13 +129,13 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
   const handleUrl = async (sourceUrl: string, domain: string) => {
     setIsLoading(true);
     setError(null);
-    setStatusMessage(`Fetching data from URL...`);
+    setStatusMessage(`Fetching remote data...`);
     try {
       const response = await fetch(sourceUrl);
-      if (!response.ok) throw new Error(`Failed to fetch: ${response.statusText}`);
+      if (!response.ok) throw new Error(`Network Error: ${response.statusText}`);
       const jsonData: OrderData[] = await response.json();
-      if (!Array.isArray(jsonData)) throw new Error("Data from URL is not a valid JSON array.");
-      processData(jsonData, domain);
+      if (!Array.isArray(jsonData)) throw new Error("Remote data must be a JSON array.");
+      await processData(jsonData, domain);
     } catch (err: any) {
       setError(err.message);
       setIsLoading(false);
@@ -151,28 +144,14 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
   };
 
   const handleSubmit = () => {
-    if (!selectedDomain) {
-      setError("Please select a domain.");
-      return;
-    }
     if (sourceType === 'file' && file) {
       handleFile(file, selectedDomain);
     } else if (sourceType === 'url' && url) {
       handleUrl(url, selectedDomain);
-    } else {
-      setError("Please select a file or enter a URL.");
     }
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      setError(null);
-      const selectedFile = e.target.files?.[0];
-      if (selectedFile) setFile(selectedFile);
-  };
-
   if (!isOpen) return null;
-
-  const isSubmitDisabled = isLoading || !selectedDomain || (sourceType === 'file' && !file) || (sourceType === 'url' && !url);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60">
@@ -183,68 +162,56 @@ const UploadModal: React.FC<UploadModalProps> = ({ isOpen, onClose, onUploadComp
         <h2 className="text-2xl font-bold text-white mb-4">Import Sales Data</h2>
         <div className="space-y-4">
           <div>
-            <label htmlFor="domain-select" className="block text-sm font-medium text-gray-300 mb-1">1. Select Domain</label>
+            <label className="block text-sm font-medium text-gray-300 mb-1">Target Domain</label>
             <select
-              id="domain-select"
               value={selectedDomain}
               onChange={e => setSelectedDomain(e.target.value)}
               disabled={isLoading}
-              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white"
             >
               {domains.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">2. Choose Data Source</label>
             <div className="flex border-b border-gray-600">
-              <button onClick={() => setSourceType('file')} disabled={isLoading} className={`flex-1 py-2 text-sm font-medium ${sourceType === 'file' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'}`}>Upload File</button>
-              <button onClick={() => setSourceType('url')} disabled={isLoading} className={`flex-1 py-2 text-sm font-medium ${sourceType === 'url' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'}`}>Import from URL</button>
+              <button onClick={() => setSourceType('file')} disabled={isLoading} className={`flex-1 py-2 text-sm font-medium ${sourceType === 'file' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'}`}>File Upload</button>
+              <button onClick={() => setSourceType('url')} disabled={isLoading} className={`flex-1 py-2 text-sm font-medium ${sourceType === 'url' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-400'}`}>Remote URL</button>
             </div>
           </div>
           {sourceType === 'file' ? (
-            <div>
-              <div className="mt-4 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-600 border-dashed rounded-md">
+            <div className="mt-4 flex justify-center px-6 pt-5 pb-6 border-2 border-gray-600 border-dashed rounded-md">
                 <div className="space-y-1 text-center">
                   <UploadIcon />
                   <div className="flex text-sm text-gray-400">
-                    <label htmlFor="file-upload" className="relative cursor-pointer bg-gray-800 rounded-md font-medium text-blue-500 hover:text-blue-400 focus-within:outline-none">
-                      <span>{file ? file.name : 'Select a file'}</span>
-                      <input id="file-upload" name="file-upload" type="file" className="sr-only" accept=".csv,.xls,.xlsx" onChange={handleFileChange} disabled={isLoading} />
+                    <label className="relative cursor-pointer bg-gray-800 rounded-md font-medium text-blue-500">
+                      <span>{file ? file.name : 'Choose file...'}</span>
+                      <input type="file" className="sr-only" accept=".csv,.xls,.xlsx" onChange={e => setFile(e.target.files?.[0] || null)} disabled={isLoading} />
                     </label>
-                    {!file && <p className="pl-1">or drag and drop</p>}
                   </div>
-                  <p className="text-xs text-gray-500">CSV or Excel up to 10MB</p>
                 </div>
-              </div>
             </div>
           ) : (
             <div className="mt-4">
-              <div className="relative">
-                 <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                    <LinkIcon />
-                 </div>
-                 <input 
-                    type="url"
-                    value={url}
-                    onChange={(e) => setUrl(e.target.value)}
-                    disabled={isLoading}
-                    placeholder="https://api.example.com/sales-data.json"
-                    className="w-full pl-10 pr-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                 />
-              </div>
+              <input 
+                type="url"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                disabled={isLoading}
+                placeholder="https://api.example.com/data.json"
+                className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white"
+              />
             </div>
           )}
-          {error && <p className="text-sm text-red-500 text-center mt-4">{error}</p>}
-          {statusMessage && <p className="text-sm text-blue-400 text-center mt-4">{statusMessage}</p>}
+          {error && <div className="bg-red-500/10 border border-red-500/20 p-3 rounded-lg text-xs text-red-400 mt-4 leading-relaxed">{error}</div>}
+          {statusMessage && <div className="flex items-center gap-3 justify-center text-sm text-blue-400 mt-4"><div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin"></div>{statusMessage}</div>}
         </div>
-        <div className="mt-6 flex justify-end">
+        <div className="mt-6">
           <button
-            type="button"
             onClick={handleSubmit}
-            disabled={isSubmitDisabled}
-            className="w-full px-4 py-3 font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed"
+            disabled={isLoading || (!file && !url)}
+            className="w-full px-4 py-3 font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 disabled:bg-gray-600 transition-all"
           >
-            {isLoading ? statusMessage || 'Processing...' : 'Process & Analyze'}
+            {isLoading ? 'Processing...' : 'Process & Analyze Data'}
           </button>
         </div>
       </div>

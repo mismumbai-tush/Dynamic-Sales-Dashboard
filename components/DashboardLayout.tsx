@@ -5,6 +5,7 @@ import UploadModal from './UploadModal';
 import DeleteDataModal from './DeleteDataModal';
 import PPTGeneratorPage from './PPTGeneratorPage';
 import { AllData, DomainData, OrderData, ColumnMapping } from '../types';
+import { supabase, fetchAllSalesData, saveDomainData } from '../utils/supabase';
 
 interface DashboardLayoutProps {
   onLogout: () => void;
@@ -12,7 +13,6 @@ interface DashboardLayoutProps {
 
 type View = 'Dashboard' | 'PPT';
 
-// Utility for robust date parsing to ensure delete logic works
 function robustParseDate(dateValue: any): Date | null {
     if (!dateValue) return null;
     if (dateValue instanceof Date && !isNaN(dateValue.getTime())) return dateValue;
@@ -36,91 +36,97 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
   const SIDEBAR_DOMAINS = ["All Domains", ...UPLOAD_DOMAINS];
 
   const [activeDomain, setActiveDomain] = useState(SIDEBAR_DOMAINS[0]);
-  const [allData, setAllData] = useState<AllData>(() => {
-    try {
-        const savedData = localStorage.getItem('salesDashboardData');
-        return savedData ? JSON.parse(savedData) : {};
-    } catch (error) {
-        console.error("Could not parse saved data from localStorage", error);
-        return {};
-    }
-  });
+  const [allData, setAllData] = useState<AllData>({});
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [currentView, setCurrentView] = useState<View>('Dashboard');
   const [uploadSummary, setUploadSummary] = useState<{ domain: string; added: number; duplicates: number } | null>(null);
 
+  // Load from Supabase on start
   useEffect(() => {
+    const loadData = async () => {
+      try {
+        const data = await fetchAllSalesData();
+        setAllData(data);
+      } catch (err) {
+        console.error("Failed to fetch data from Supabase, falling back to local storage", err);
+        const savedData = localStorage.getItem('salesDashboardData');
+        if (savedData) setAllData(JSON.parse(savedData));
+      } finally {
+        setIsInitialLoading(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  const handleFileUpload = async (domain: string, newData: OrderData[], newMapping: ColumnMapping) => {
+    const existingDomainData = allData[domain];
+    const existingData = existingDomainData?.data || [];
+
+    const rowToString = (row: OrderData): string => {
+      return JSON.stringify(Object.entries(row).sort((a, b) => a[0].localeCompare(b[0])));
+    };
+
+    const allKnownRows = new Set(existingData.map(rowToString));
+    let duplicateCount = 0;
+
+    const uniqueNewData = newData.filter(row => {
+      const rowString = rowToString(row);
+      if (allKnownRows.has(rowString)) {
+        duplicateCount++;
+        return false; 
+      }
+      allKnownRows.add(rowString); 
+      return true;
+    });
+
+    const consolidatedData = [...existingData, ...uniqueNewData];
+    const newDomainState = { data: consolidatedData, mapping: newMapping };
+
     try {
-      localStorage.setItem('salesDashboardData', JSON.stringify(allData));
-    } catch (error) {
-      console.error("Could not save data to localStorage", error);
-    }
-  }, [allData]);
-
-  const handleFileUpload = (domain: string, newData: OrderData[], newMapping: ColumnMapping) => {
-    setAllData(prev => {
-      const existingDomainData = prev[domain];
-      const existingData = existingDomainData?.data || [];
-
-      const rowToString = (row: OrderData): string => {
-        return JSON.stringify(Object.entries(row).sort((a, b) => a[0].localeCompare(b[0])));
-      };
-
-      const allKnownRows = new Set(existingData.map(rowToString));
-      let duplicateCount = 0;
-
-      const uniqueNewData = newData.filter(row => {
-        const rowString = rowToString(row);
-        if (allKnownRows.has(rowString)) {
-          duplicateCount++;
-          return false; 
-        }
-        allKnownRows.add(rowString); 
-        return true;
-      });
-
+      // Logic in saveDomainData handles lowercase table names
+      await saveDomainData(domain, newDomainState);
+      setAllData(prev => ({ ...prev, [domain]: newDomainState }));
       setUploadSummary({ domain, added: uniqueNewData.length, duplicates: duplicateCount });
       setTimeout(() => setUploadSummary(null), 8000);
-
-      const consolidatedData = [...existingData, ...uniqueNewData];
-      return { ...prev, [domain]: { data: consolidatedData, mapping: newMapping } };
-    });
-    setActiveDomain(domain);
-    setCurrentView('Dashboard');
+      setActiveDomain(domain);
+      setCurrentView('Dashboard');
+    } catch (err) {
+      alert(`Failed to save data to Supabase table for ${domain}. Please ensure the table exists.`);
+    }
   };
 
-  const handleDataDelete = (domain: string, year: number, month: number) => {
-    setAllData(prev => {
-      const nextState = { ...prev };
-      const domainsToPurge = domain === 'All Domains' ? Object.keys(nextState) : [domain];
+  const handleDataDelete = async (domain: string, year: number, month: number) => {
+    const domainsToPurge = domain === 'All Domains' ? Object.keys(allData) : [domain];
+    const nextAllData = { ...allData };
 
-      domainsToPurge.forEach(dom => {
-        const domainState = nextState[dom];
-        if (!domainState) return;
+    for (const dom of domainsToPurge) {
+      const domainState = nextAllData[dom];
+      if (!domainState) continue;
 
-        const { data, mapping } = domainState;
-        // Find the date key, even if the mapping isn't fully updated yet
-        const dateKey = mapping.date || Object.keys(data[0] || {}).find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('on'));
-        
-        if (!dateKey) return;
+      const { data, mapping } = domainState;
+      const dateKey = mapping.date || Object.keys(data[0] || {}).find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('on'));
+      
+      if (!dateKey) continue;
 
-        const newData = data.filter(row => {
-          const date = robustParseDate(row[dateKey]);
-          if (!date) return true; // Keep rows with unparseable dates
-          
-          const matchesYear = date.getFullYear() === year;
-          const matchesMonth = month === -1 ? true : date.getMonth() === month;
-
-          // If it matches both criteria, we DON'T want to keep it (return false)
-          return !(matchesYear && matchesMonth);
-        });
-
-        nextState[dom] = { ...domainState, data: newData };
+      const newData = data.filter(row => {
+        const date = robustParseDate(row[dateKey]);
+        if (!date) return true;
+        const matchesYear = date.getFullYear() === year;
+        const matchesMonth = month === -1 ? true : date.getMonth() === month;
+        return !(matchesYear && matchesMonth);
       });
 
-      return nextState;
-    });
+      nextAllData[dom] = { ...domainState, data: newData };
+      try {
+        await saveDomainData(dom, nextAllData[dom]);
+      } catch (err) {
+        console.error(`Failed to update table for ${dom} after purge`, err);
+      }
+    }
+
+    setAllData(nextAllData);
   };
 
   const currentDomainData = useMemo<DomainData | null>((() => {
@@ -149,9 +155,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
           if (normalizedRow['revenue'] === null && normalizedRow['price'] !== null && normalizedRow['quantity'] !== null) {
               const price = Number(normalizedRow['price']);
               const quantity = Number(normalizedRow['quantity']);
-              if (!isNaN(price) && !isNaN(quantity)) {
-                  normalizedRow['revenue'] = price * quantity;
-              }
+              if (!isNaN(price) && !isNaN(quantity)) normalizedRow['revenue'] = price * quantity;
           }
           return normalizedRow;
         });
@@ -171,17 +175,23 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
     return allData[activeDomain] || null;
   }), [activeDomain, allData]);
 
-  const onSetActiveDomain = (domain: string) => {
-    setActiveDomain(domain);
-    setCurrentView('Dashboard');
-  };
+  if (isInitialLoading) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-gray-900">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-slate-400 font-bold uppercase tracking-widest text-xs">Syncing Multi-Table Data...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-900">
       <Sidebar 
         domains={SIDEBAR_DOMAINS} 
         activeDomain={activeDomain} 
-        setActiveDomain={onSetActiveDomain} 
+        setActiveDomain={setActiveDomain} 
         onLogout={onLogout}
         setCurrentView={setCurrentView}
         activeView={currentView}
@@ -195,10 +205,11 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
                 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-400 w-5 h-5"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
               </div>
               <div>
-                <h4 className="text-white font-bold text-sm">Upload Summary: {uploadSummary.domain}</h4>
+                <h4 className="text-white font-bold text-sm">Cloud Sync Success: {uploadSummary.domain}</h4>
+                <p className="text-slate-400 text-xs mt-1">Saved to <span className="text-blue-400 font-mono">supabase.{uploadSummary.domain.toLowerCase()}</span></p>
                 <p className="text-slate-400 text-xs mt-1">Successfully added <span className="text-blue-400 font-bold">{uploadSummary.added}</span> unique records.</p>
                 {uploadSummary.duplicates > 0 && (
-                  <p className="text-amber-400 text-xs mt-1 font-medium">Purged <span className="font-bold">{uploadSummary.duplicates}</span> duplicate rows.</p>
+                  <p className="text-amber-400 text-xs mt-1 font-medium">Filtered <span className="font-bold">{uploadSummary.duplicates}</span> duplicates.</p>
                 )}
               </div>
               <button onClick={() => setUploadSummary(null)} className="text-slate-500 hover:text-white transition-colors">
