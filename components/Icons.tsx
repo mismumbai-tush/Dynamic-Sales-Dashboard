@@ -1,17 +1,14 @@
 import React from 'react';
 
 export const RupeeIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-6 w-6 text-green-400">
-        <path d="M6 3h12" />
-        <path d="M6 8h12" />
-        <path d="M6 3a7 7 0 0 1 0 14h3" />
-        <path d="m9 17 6 4" />
-    </svg>
+    <div className="flex items-center justify-center h-6 w-6 text-green-400 font-bold text-lg leading-none">
+        Rs
+    </div>
 );
 
 export const RevenueIcon = () => (
-    <div className="flex items-center justify-center h-6 w-6 text-green-400 font-bold text-xl">
-        ₹
+    <div className="flex items-center justify-center h-6 w-6 text-green-400 font-black text-lg leading-none tracking-tighter">
+        Rs
     </div>
 );
 

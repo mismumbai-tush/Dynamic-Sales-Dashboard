@@ -12,6 +12,25 @@ interface DashboardLayoutProps {
 
 type View = 'Dashboard' | 'PPT';
 
+// Utility for robust date parsing to ensure delete logic works
+function robustParseDate(dateValue: any): Date | null {
+    if (!dateValue) return null;
+    if (dateValue instanceof Date && !isNaN(dateValue.getTime())) return dateValue;
+    let date = new Date(dateValue);
+    if (!isNaN(date.getTime())) return date;
+    const s = String(dateValue);
+    const parts = s.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})$/);
+    if (parts) {
+        const day = parseInt(parts[1], 10);
+        const month = parseInt(parts[2], 10);
+        let year = parseInt(parts[3], 10);
+        if (year < 100) year += 2000;
+        date = new Date(year, month - 1, day);
+        if (!isNaN(date.getTime())) return date;
+    }
+    return null;
+}
+
 const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
   const UPLOAD_DOMAINS = ["Myntra", "Amazon", "Flipkart", "AJIO", "Shopify"];
   const SIDEBAR_DOMAINS = ["All Domains", ...UPLOAD_DOMAINS];
@@ -62,7 +81,7 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
       });
 
       setUploadSummary({ domain, added: uniqueNewData.length, duplicates: duplicateCount });
-      setTimeout(() => setUploadSummary(null), 8000); // Clear summary after 8 seconds
+      setTimeout(() => setUploadSummary(null), 8000);
 
       const consolidatedData = [...existingData, ...uniqueNewData];
       return { ...prev, [domain]: { data: consolidatedData, mapping: newMapping } };
@@ -72,50 +91,35 @@ const DashboardLayout: React.FC<DashboardLayoutProps> = ({ onLogout }) => {
   };
 
   const handleDataDelete = (domain: string, year: number, month: number) => {
-    if (domain === 'All Domains' && month === -1 && year) {
-        setAllData(prev => {
-            const nextState = { ...prev };
-            for(const dom in nextState) {
-                const domainState = nextState[dom];
-                 if (!domainState) continue;
-                 const { data, mapping } = domainState;
-                 if (!mapping.date) continue;
-
-                 const newData = data.filter(row => {
-                     const date = new Date(row[mapping.date!] as string);
-                     if (isNaN(date.getTime())) return true;
-                     return date.getFullYear() !== year;
-                 });
-                 nextState[dom] = { ...domainState, data: newData };
-            }
-            return nextState;
-        });
-        return;
-    }
-
-    if (domain === 'All Domains') {
-      setAllData({});
-      return;
-    }
-
     setAllData(prev => {
-      const domainState = prev[domain];
-      if (!domainState) return prev;
-      
-      const { data, mapping } = domainState;
-      if (!mapping.date) return prev;
+      const nextState = { ...prev };
+      const domainsToPurge = domain === 'All Domains' ? Object.keys(nextState) : [domain];
 
-      const newData = data.filter(row => {
-        const date = new Date(row[mapping.date!] as string);
-        if (isNaN(date.getTime())) return true;
+      domainsToPurge.forEach(dom => {
+        const domainState = nextState[dom];
+        if (!domainState) return;
+
+        const { data, mapping } = domainState;
+        // Find the date key, even if the mapping isn't fully updated yet
+        const dateKey = mapping.date || Object.keys(data[0] || {}).find(k => k.toLowerCase().includes('date') || k.toLowerCase().includes('on'));
         
-        const matchesYear = date.getFullYear() === year;
-        const matchesMonth = month === -1 ? true : date.getMonth() === month;
+        if (!dateKey) return;
 
-        return !(matchesYear && matchesMonth);
+        const newData = data.filter(row => {
+          const date = robustParseDate(row[dateKey]);
+          if (!date) return true; // Keep rows with unparseable dates
+          
+          const matchesYear = date.getFullYear() === year;
+          const matchesMonth = month === -1 ? true : date.getMonth() === month;
+
+          // If it matches both criteria, we DON'T want to keep it (return false)
+          return !(matchesYear && matchesMonth);
+        });
+
+        nextState[dom] = { ...domainState, data: newData };
       });
-      
-      return { ...prev, [domain]: { ...domainState, data: newData } };
+
+      return nextState;
     });
   };
 

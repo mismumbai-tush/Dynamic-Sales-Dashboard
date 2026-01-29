@@ -18,9 +18,9 @@ const InsightTable: React.FC<InsightTableProps> = ({ data, title, columns }) => 
     }
     
     const formatValue = (value: any, format?: 'currency' | 'number') => {
-        if (format === 'currency') return `Rs. ${Number(value).toLocaleString('en-IN')}`;
-        if (format === 'number') return Number(value).toLocaleString('en-IN');
-        return String(value);
+        const num = Number(value);
+        if (isNaN(num)) return String(value);
+        return num.toLocaleString('en-IN');
     };
 
     return (

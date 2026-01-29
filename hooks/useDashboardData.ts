@@ -1,9 +1,8 @@
 import { useMemo } from 'react';
 import { DomainData, DateRange, OrderData, ColumnMapping, Kpi } from '../types';
 
-const formatCurrency = (value: number, includePrefix = true) => {
-    const formatted = value.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-    return includePrefix ? `Rs. ${formatted}` : formatted;
+const formatCurrency = (value: number) => {
+    return value.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 };
 const formatNumber = (value: number) => value.toLocaleString('en-IN');
 
@@ -133,14 +132,14 @@ export const useDashboardData = (domainData: DomainData | null, dateRange: DateR
     const avgOrderValue = totalOrdersCount > 0 ? totalRevenue / totalOrdersCount : 0;
 
     return [
-      { title: "Total Revenue", value: formatCurrency(totalRevenue, false) },
+      { title: "Total Revenue", value: formatCurrency(totalRevenue) },
       { title: "Total Delivered Orders", value: formatNumber(deliveredOrders) },
       { title: "Total Cancelled Orders", value: formatNumber(cancelledOrders) },
       { title: "Total Orders", value: formatNumber(totalOrdersCount) },
       { title: "Total Customers", value: formatNumber(totalCustomers) },
-      { title: "Avg Order", value: formatCurrency(avgOrderValue, false) },
+      { title: "Avg Order", value: formatCurrency(avgOrderValue) },
       { title: "Total Returns Created", value: formatNumber(returnCount) },
-      { title: "Total Return Value", value: formatCurrency(returnTotalValue, false) },
+      { title: "Total Return Value", value: formatCurrency(returnTotalValue) },
     ];
   }, [filteredData, domainData?.mapping, totalCustomers, totalOrdersCount, returnCount, returnTotalValue]);
 
